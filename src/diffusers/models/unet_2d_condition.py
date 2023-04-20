@@ -49,6 +49,7 @@ class UNet2DConditionOutput(BaseOutput):
     """
 
     sample: torch.FloatTensor
+    cross_attention: Optional[torch.FloatTensor] = None
 
 
 class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin):
@@ -693,17 +694,29 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         # 2. pre-process
         sample = self.conv_in(sample)
 
+        if cross_attention_kwargs is not None and "needs_cross_attention" in cross_attention_kwargs:
+            needs_cross_attention = cross_attention_kwargs["needs_cross_attention"]
+        else:
+            needs_cross_attention = False
+        if needs_cross_attention:
+            cross_attention = []
+
         # 3. down
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
-                sample, res_samples = downsample_block(
+                out = downsample_block(
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
                 )
+                if needs_cross_attention and len(out)==3:
+                    sample, res_samples, ca = out
+                    cross_attention.append(ca)
+                else:
+                    sample, res_samples = out
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
 
@@ -729,6 +742,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 attention_mask=attention_mask,
                 cross_attention_kwargs=cross_attention_kwargs,
             )
+            if needs_cross_attention and len(sample)==2:
+                sample, ca = sample
+                cross_attention.append(ca)
 
         if mid_block_additional_residual is not None:
             sample = sample + mid_block_additional_residual
@@ -755,6 +771,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
                 )
+                if needs_cross_attention and len(sample)==2:
+                    sample, ca = sample
+                    cross_attention.append(ca)
             else:
                 sample = upsample_block(
                     hidden_states=sample, temb=emb, res_hidden_states_tuple=res_samples, upsample_size=upsample_size
@@ -768,5 +787,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
         if not return_dict:
             return (sample,)
-
-        return UNet2DConditionOutput(sample=sample)
+        if needs_cross_attention:
+            return UNet2DConditionOutput(sample=sample, cross_attention=cross_attention)
+        else:
+            return UNet2DConditionOutput(sample=sample)

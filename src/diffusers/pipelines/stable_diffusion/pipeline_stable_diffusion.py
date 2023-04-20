@@ -547,6 +547,8 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: int = 1,
+        needs_intermediate = False, # intermediate images
+        needs_cross_attention = False, # cross-attention weights
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
     ):
         r"""
@@ -641,6 +643,10 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
+        if cross_attention_kwargs is None:
+            cross_attention_kwargs = {}
+        cross_attention_kwargs["needs_cross_attention"] = needs_cross_attention
+        
         # 3. Encode input prompt
         prompt_embeds = self._encode_prompt(
             prompt,
@@ -673,6 +679,12 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
         # 7. Denoising loop
+        if(needs_intermediate):
+            timestep_latents = [latents]
+            timestep_images = [self.decode_latents(latents)]
+        if(needs_cross_attention):
+            timestep_cross_attentions= []
+
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -681,12 +693,16 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 # predict the noise residual
-                noise_pred = self.unet(
+                unet_out = self.unet(
                     latent_model_input,
                     t,
                     encoder_hidden_states=prompt_embeds,
                     cross_attention_kwargs=cross_attention_kwargs,
-                ).sample
+                )
+                noise_pred = unet_out.sample
+                if(needs_cross_attention):
+                    timestep_cross_attentions.append(unet_out.cross_attention)
+
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -695,6 +711,10 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
+
+                if(needs_intermediate):
+                    timestep_latents.append(latents)
+                    timestep_images.append(self.decode_latents(latents))
 
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
@@ -714,6 +734,9 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
 
             # 10. Convert to PIL
             image = self.numpy_to_pil(image)
+            if(needs_intermediate):
+                timestep_images = [self.numpy_to_pil(x) for x in timestep_images]
+
         else:
             # 8. Post-processing
             image = self.decode_latents(latents)
@@ -728,4 +751,9 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
         if not return_dict:
             return (image, has_nsfw_concept)
 
-        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
+        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept,
+        prompt_embeds=prompt_embeds,
+        timestep_images=timestep_images if needs_intermediate else None,
+        timestep_latents=timestep_latents if needs_intermediate else None,
+        timestep_cross_attentions=timestep_cross_attentions if needs_cross_attention else None,
+        )

@@ -290,6 +290,12 @@ class BasicTransformerBlock(nn.Module):
         else:
             norm_hidden_states = self.norm1(hidden_states)
 
+        if cross_attention_kwargs is not None and "needs_cross_attention" in cross_attention_kwargs:
+            needs_cross_attention = cross_attention_kwargs["needs_cross_attention"]
+        else:
+            needs_cross_attention = False
+            
+        # 1. Self-Attention
         cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
         attn_output = self.attn1(
             norm_hidden_states,
@@ -309,12 +315,20 @@ class BasicTransformerBlock(nn.Module):
             # TODO (Birch-San): Here we should prepare the encoder_attention mask correctly
             # prepare attention mask here
 
-            attn_output = self.attn2(
-                norm_hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                attention_mask=encoder_attention_mask,
-                **cross_attention_kwargs,
-            )
+            if not needs_cross_attention:
+                attn_output = self.attn2(
+                    norm_hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    attention_mask=encoder_attention_mask,
+                    **cross_attention_kwargs,
+                )
+            else:
+                attn_output, cross_attention = self.attn2(
+                    norm_hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    attention_mask=encoder_attention_mask,
+                    **cross_attention_kwargs,
+                )
             hidden_states = attn_output + hidden_states
 
         # 3. Feed-forward
@@ -330,7 +344,10 @@ class BasicTransformerBlock(nn.Module):
 
         hidden_states = ff_output + hidden_states
 
-        return hidden_states
+        if not needs_cross_attention:
+            return hidden_states
+        else:
+            return hidden_states, cross_attention
 
 
 class FeedForward(nn.Module):

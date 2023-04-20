@@ -4,6 +4,7 @@ from typing import List, Optional, Union
 import numpy as np
 import PIL
 from PIL import Image
+import torch
 
 from ...utils import (
     BaseOutput,
@@ -34,6 +35,10 @@ class StableDiffusionPipelineOutput(BaseOutput):
 
     images: Union[List[PIL.Image.Image], np.ndarray]
     nsfw_content_detected: Optional[List[bool]]
+    prompt_embeds: Optional[torch.FloatTensor] = None
+    timestep_latents: Optional[List[torch.FloatTensor]] = None
+    timestep_images: Optional[List[PIL.Image.Image]] = None
+    timestep_cross_attentions: Optional[List[torch.FloatTensor]] = None
 
 
 try:

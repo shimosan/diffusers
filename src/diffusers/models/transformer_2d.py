@@ -36,6 +36,7 @@ class Transformer2DModelOutput(BaseOutput):
     """
 
     sample: torch.FloatTensor
+    cross_attention: Optional[torch.FloatTensor] = None
 
 
 class Transformer2DModel(ModelMixin, ConfigMixin):
@@ -260,15 +261,32 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         elif self.is_input_patches:
             hidden_states = self.pos_embed(hidden_states)
 
+        if cross_attention_kwargs is not None and "needs_cross_attention" in cross_attention_kwargs:
+            needs_cross_attention = cross_attention_kwargs["needs_cross_attention"]
+        else:
+            needs_cross_attention = False
+        if needs_cross_attention:
+            cross_attention = []
+
         # 2. Blocks
         for block in self.transformer_blocks:
-            hidden_states = block(
-                hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                timestep=timestep,
-                cross_attention_kwargs=cross_attention_kwargs,
-                class_labels=class_labels,
-            )
+            if not needs_cross_attention:
+                hidden_states = block(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    timestep=timestep,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    class_labels=class_labels,
+                )
+            else:
+                hidden_states, ca = block(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    timestep=timestep,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    class_labels=class_labels,
+                )
+                cross_attention.extend(ca)
 
         # 3. Output
         if self.is_input_continuous:
@@ -310,4 +328,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         if not return_dict:
             return (output,)
 
-        return Transformer2DModelOutput(sample=output)
+        if not needs_cross_attention:
+            return Transformer2DModelOutput(sample=output)
+        else:
+            return Transformer2DModelOutput(sample=output, cross_attention=cross_attention)

@@ -20,6 +20,7 @@ from torch import nn
 from ..utils import deprecate, logging
 from ..utils.import_utils import is_xformers_available
 
+import math
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -609,7 +610,7 @@ class AttnProcessor2_0:
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError("AttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
-    def __call__(self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def __call__(self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, needs_cross_attention=False):
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         )
@@ -625,6 +626,7 @@ class AttnProcessor2_0:
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
+            needs_cross_attention = False # for avoiding self-attention weights
         elif attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
@@ -641,6 +643,9 @@ class AttnProcessor2_0:
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
+        if needs_cross_attention:
+            ## compute cross-attention weights only for visualization purposes
+            cross_attention = torch.softmax((query @ key.transpose(-2, -1) / math.sqrt(query.size(-1))), dim=-1 )
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
@@ -649,7 +654,11 @@ class AttnProcessor2_0:
         hidden_states = attn.to_out[0](hidden_states)
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
-        return hidden_states
+
+        if not needs_cross_attention:
+            return hidden_states
+        else:
+            return hidden_states, (cross_attention,)
 
 
 class LoRAXFormersAttnProcessor(nn.Module):

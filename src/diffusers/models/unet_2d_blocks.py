@@ -554,16 +554,37 @@ class UNetMidBlock2DCrossAttn(nn.Module):
     def forward(
         self, hidden_states, temb=None, encoder_hidden_states=None, attention_mask=None, cross_attention_kwargs=None
     ):
+
+        if cross_attention_kwargs is not None and "needs_cross_attention" in cross_attention_kwargs:
+            needs_cross_attention = cross_attention_kwargs["needs_cross_attention"]
+        else:
+            needs_cross_attention = False
+        if needs_cross_attention:
+            cross_attention = []
+        
         hidden_states = self.resnets[0](hidden_states, temb)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
-            hidden_states = attn(
-                hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                cross_attention_kwargs=cross_attention_kwargs,
-            ).sample
+            if not needs_cross_attention:
+                hidden_states = attn(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                ).sample
+            else:
+                out_attn = attn(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                )
+                hidden_states = out_attn.sample
+                cross_attention.extend(out_attn.cross_attention)
+
             hidden_states = resnet(hidden_states, temb)
 
-        return hidden_states
+        if not needs_cross_attention:
+            return hidden_states
+        else:
+            return hidden_states, cross_attention
 
 
 class UNetMidBlock2DSimpleCrossAttn(nn.Module):
@@ -843,6 +864,13 @@ class CrossAttnDownBlock2D(nn.Module):
         # TODO(Patrick, William) - attention mask is not used
         output_states = ()
 
+        if cross_attention_kwargs is not None and "needs_cross_attention" in cross_attention_kwargs:
+            needs_cross_attention = cross_attention_kwargs["needs_cross_attention"]
+        else:
+            needs_cross_attention = False
+        if needs_cross_attention:
+            cross_attention = []
+
         for resnet, attn in zip(self.resnets, self.attentions):
             if self.training and self.gradient_checkpointing:
 
@@ -864,11 +892,20 @@ class CrossAttnDownBlock2D(nn.Module):
                 )[0]
             else:
                 hidden_states = resnet(hidden_states, temb)
-                hidden_states = attn(
-                    hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    cross_attention_kwargs=cross_attention_kwargs,
-                ).sample
+                if not needs_cross_attention:
+                    hidden_states = attn(
+                        hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                    ).sample
+                else:
+                    out_attn = attn(
+                        hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                    )
+                    hidden_states = out_attn.sample
+                    cross_attention.extend(out_attn.cross_attention)
 
             output_states += (hidden_states,)
 
@@ -878,7 +915,10 @@ class CrossAttnDownBlock2D(nn.Module):
 
             output_states += (hidden_states,)
 
-        return hidden_states, output_states
+        if not needs_cross_attention:
+            return hidden_states, output_states
+        else:
+            return hidden_states, output_states, cross_attention
 
 
 class DownBlock2D(nn.Module):
@@ -1829,6 +1869,14 @@ class CrossAttnUpBlock2D(nn.Module):
         attention_mask=None,
     ):
         # TODO(Patrick, William) - attention mask is not used
+
+        if cross_attention_kwargs is not None and "needs_cross_attention" in cross_attention_kwargs:
+            needs_cross_attention = cross_attention_kwargs["needs_cross_attention"]
+        else:
+            needs_cross_attention = False
+        if needs_cross_attention:
+            cross_attention = []
+
         for resnet, attn in zip(self.resnets, self.attentions):
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
@@ -1855,17 +1903,29 @@ class CrossAttnUpBlock2D(nn.Module):
                 )[0]
             else:
                 hidden_states = resnet(hidden_states, temb)
-                hidden_states = attn(
-                    hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    cross_attention_kwargs=cross_attention_kwargs,
-                ).sample
+                if not needs_cross_attention:
+                    hidden_states = attn(
+                        hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                    ).sample
+                else:
+                    out_attn = attn(
+                        hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        cross_attention_kwargs=cross_attention_kwargs,
+                    )
+                    hidden_states = out_attn.sample
+                    cross_attention.extend(out_attn.cross_attention)
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
                 hidden_states = upsampler(hidden_states, upsample_size)
 
-        return hidden_states
+        if not needs_cross_attention:
+            return hidden_states
+        else:
+            return hidden_states, cross_attention
 
 
 class UpBlock2D(nn.Module):
